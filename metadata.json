@@ -1,0 +1,7 @@
+{
+  "name": "AI Marketplace Platform",
+  "description": "A minimal, Vercel-inspired AI marketplace web application. Explore AI tools, hold intelligent voice conversations with an AI cofounder, and manage usage — all within a frictionless, elegant interface.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
