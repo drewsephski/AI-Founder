@@ -4,6 +4,11 @@ export enum View {
   AIHub = 'aihub',
   Dashboard = 'dashboard',
   Admin = 'admin',
+  SignIn = 'sign-in',
+  SignUp = 'sign-up',
+  ToolChat = 'tool-chat',
+  ToolComplexQuery = 'tool-complex-query',
+  ToolImageEditor = 'tool-image-editor',
 }
 
 export enum ToolType {

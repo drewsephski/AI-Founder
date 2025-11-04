@@ -4,9 +4,10 @@ interface SaveSessionModalProps {
   isOpen: boolean;
   onSave: (name: string) => void;
   onClose: () => void;
+  isLoading?: boolean;
 }
 
-const SaveSessionModal: React.FC<SaveSessionModalProps> = ({ isOpen, onSave, onClose }) => {
+const SaveSessionModal: React.FC<SaveSessionModalProps> = ({ isOpen, onSave, onClose, isLoading = false }) => {
   const [sessionName, setSessionName] = useState('');
 
   useEffect(() => {
@@ -56,10 +57,10 @@ const SaveSessionModal: React.FC<SaveSessionModalProps> = ({ isOpen, onSave, onC
           </button>
           <button
             onClick={handleSave}
-            disabled={!sessionName.trim()}
+            disabled={!sessionName.trim() || isLoading}
             className="px-6 py-2 bg-primary text-primary-foreground rounded-md font-semibold hover:bg-primary/90 disabled:bg-secondary disabled:text-secondary-foreground/50 transition-colors"
           >
-            Save
+            {isLoading ? 'Saving...' : 'Save'}
           </button>
         </div>
       </div>

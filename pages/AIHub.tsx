@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 // Fix: "LiveSession" is not an exported member of "@google/genai".
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
-import { MicIcon, StopIcon } from '../components/icons/Icons';
+import { MicIcon, StopIcon, LockIcon } from '../components/icons/Icons';
 import { TranscriptionEntry, SavedSession } from '../types';
 import SaveSessionModal from '../components/SaveSessionModal';
+import AuthGuard from '../components/AuthGuard';
+import { SignInButton } from '@clerk/clerk-react';
+import { saveSession, syncUserToDatabase } from '../lib/userManager';
+
+interface AIHubProps {
+  currentUser: any;
+}
 
 // Audio helper functions
 function encode(bytes: Uint8Array): string {
@@ -80,13 +87,14 @@ enum CallStatus {
   Ending = 'Call ended. Ready to start a new call.',
 }
 
-const AIHub: React.FC = () => {
+const AIHub: React.FC<AIHubProps> = ({ currentUser }) => {
   const [isConversing, setIsConversing] = useState(false);
   const [callStatus, setCallStatus] = useState<CallStatus>(CallStatus.Idle);
   const [error, setError] = useState<string | null>(null);
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [transcriptToSave, setTranscriptToSave] = useState<TranscriptionEntry[] | null>(null);
+  const [isSavingToDb, setIsSavingToDb] = useState(false);
   
   const transcriptionsRef = useRef(transcriptions);
   transcriptionsRef.current = transcriptions;
@@ -164,24 +172,42 @@ const AIHub: React.FC = () => {
     }
   }, [cleanupAudio]);
 
-  const handleSaveSession = (sessionName: string) => {
-    if (!transcriptToSave) return;
+  const handleSaveSession = async (sessionName: string) => {
+    if (!transcriptToSave || !currentUser) return;
+    
+    setIsSavingToDb(true);
     try {
+      // Sync user to database first (as per Context7 documentation pattern)
+      await syncUserToDatabase(currentUser);
+      
+      // Save session using the improved userManager function
+      await saveSession(currentUser, sessionName, transcriptToSave);
+      
+      console.log('Session saved successfully to database');
+    } catch (e) {
+      console.error("Failed to save session:", e);
+      
+      // Enhanced fallback with better error handling
       const newSession: SavedSession = {
         id: crypto.randomUUID(),
         name: sessionName,
         timestamp: new Date().toISOString(),
         transcript: transcriptToSave,
       };
-      const existingSessions = JSON.parse(localStorage.getItem('aihub_sessions') || '[]') as SavedSession[];
-      localStorage.setItem('aihub_sessions', JSON.stringify([...existingSessions, newSession]));
-    } catch (e) {
-      console.error("Failed to save session:", e);
-      setError("Could not save session. Local storage might be full or disabled.");
+      
+      try {
+        const existingSessions = JSON.parse(localStorage.getItem('aihub_sessions') || '[]') as SavedSession[];
+        localStorage.setItem('aihub_sessions', JSON.stringify([...existingSessions, newSession]));
+        setError("Saved to local storage (database save failed). Your data will sync when you sign in.");
+      } catch (localStorageError) {
+        console.error("Failed to save to local storage:", localStorageError);
+        setError("Failed to save session. Please try again.");
+      }
     } finally {
       setIsSaveModalOpen(false);
       setTranscriptToSave(null);
       setTranscriptions([]);
+      setIsSavingToDb(false);
     }
   };
   
@@ -369,43 +395,117 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-24 flex flex-col items-center">
       <div className="w-full max-w-3xl">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold tracking-tight">AI Cofounder Call</h1>
-          <p className="mt-4 text-lg text-secondary-foreground/80">
+          <h1 className="text-4xl font-bold tracking-tight font-bricolage">AI Cofounder Call</h1>
+          <p className="mt-4 text-lg text-secondary-foreground/80 font-bricolage">
             Click the button below to start a live voice call with your AI business partner.
           </p>
         </div>
-        <div className="bg-card border border-border rounded-lg p-6 min-h-[50vh] flex flex-col">
-          <div className="flex-grow overflow-y-auto space-y-4 mb-4 pr-2">
-            {transcriptions.map((t, i) => (
-              <div key={i} className={`flex ${t.speaker === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`p-3 rounded-lg max-w-md ${t.speaker === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
-                  <span className="font-bold capitalize">{t.speaker}: </span>{t.text}
+
+        {/* Demo Interface for Unauthenticated Users */}
+        {!currentUser && (
+          <div className="mb-8">
+            
+            <div className="bg-card border border-border rounded-lg p-6 min-h-[50vh] flex flex-col relative">
+              {/* Demo conversation transcript */}
+              <div className="flex-grow overflow-y-auto space-y-4 mb-4 pr-2">
+                <div className="flex justify-start">
+                  <div className="p-3 rounded-lg max-w-md bg-secondary">
+                    <span className="font-bold capitalize">strat: </span>It's Strat. Good to connect. Do you have a specific business challenge on your mind, or should we jump into some strategic brainstorming?
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <div className="p-3 rounded-lg max-w-md bg-primary text-primary-foreground">
+                    <span className="font-bold capitalize">you: </span>I'm thinking about starting a tech company, but I'm not sure about the market fit.
+                  </div>
+                </div>
+                <div className="flex justify-start">
+                  <div className="p-3 rounded-lg max-w-md bg-secondary">
+                    <span className="font-bold capitalize">strat: </span>Alright, let's jump in. Who is your absolute ideal customer, and what problem are you solving for them that they'd gladly pay for?
+                  </div>
                 </div>
               </div>
-            ))}
-             {!transcriptions.length && !isConversing && (
-                 <div className="flex items-center justify-center h-full text-secondary-foreground">
-                    <p>Conversation transcript will appear here.</p>
+              
+              {/* Disabled voice button with overlay */}
+              <div className="flex flex-col items-center border-t border-border pt-6 relative">
+                <div className="absolute inset-0 bg-background/50 rounded-b-lg z-10 flex items-center justify-center backdrop-blur-sm">
+                  <div className="bg-card border border-border rounded-lg p-4 shadow-lg">
+                    <LockIcon className="w-6 h-6 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-md font-medium text-card-foreground text-center">Authentication Required</p>
+                    <p className="text-xs text-secondary-foreground/70 mt-1 text-center">Sign in to start your AI cofounder call</p>
+                  </div>
                 </div>
-             )}
+                
+                <button
+                  disabled
+                  className="w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 bg-secondary cursor-not-allowed opacity-50"
+                  aria-label="Demo voice call (authentication required)"
+                >
+                  <MicIcon className="w-8 h-8 text-muted-foreground" />
+                </button>
+                
+                <p className="text-sm h-5 mb-4 text-secondary-foreground/70 mt-4">
+                  Demo: Ready to call your AI Cofounder (Sign in to activate)
+                </p>
+              </div>
+            </div>
+            
+            {/* Sign in prompt */}
+            <div className="mt-6 text-center">
+              <SignInButton mode="modal">
+                <button className="px-8 py-3 bg-primary text-primary-foreground font-semibold rounded-md hover:bg-primary/90 transition-colors">
+                  Sign In to Start Your AI Cofounder Call
+                </button>
+              </SignInButton>
+            </div>
           </div>
-          <div className="flex flex-col items-center border-t border-border pt-6">
-            <p className={`text-sm h-5 mb-4 ${error ? 'text-red-500' : 'text-secondary-foreground/70'}`}>{statusMessage}</p>
-            <button
-              onClick={isConversing ? () => stopConversation() : startConversation}
-              disabled={isConversing && callStatus !== CallStatus.Live && callStatus !== CallStatus.Connected}
-              className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${isConversing ? 'bg-red-600 hover:bg-red-700 animate-pulse-glow' : 'bg-green-500 hover:bg-green-600'} disabled:bg-secondary disabled:cursor-not-allowed`}
-              aria-label={isConversing ? 'End call' : 'Start call'}
-            >
-              {isConversing ? <StopIcon className="w-8 h-8 text-white" /> : <MicIcon className="w-8 h-8 text-white" />}
-            </button>
-          </div>
-        </div>
+        )}
+        
+        {/* Authenticated User Interface */}
+        {currentUser && (
+          <AuthGuard>
+            <div className="mb-4 text-sm text-secondary-foreground/70">
+              <span>Signed in as: {currentUser.primaryEmailAddress?.emailAddress || currentUser.emailAddresses?.[0]?.emailAddress || 'User'}</span>
+            </div>
+            
+            <div className="bg-card border border-border rounded-lg p-6 min-h-[50vh] flex flex-col">
+              <div className="flex-grow overflow-y-auto space-y-4 mb-4 pr-2">
+                {transcriptions.map((t, i) => (
+                  <div key={i} className={`flex ${t.speaker === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`p-3 rounded-lg max-w-md ${t.speaker === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
+                      <span className="font-bold capitalize">{t.speaker}: </span>{t.text}
+                    </div>
+                  </div>
+                ))}
+                 {!transcriptions.length && !isConversing && (
+                     <div className="flex items-center justify-center h-full text-secondary-foreground">
+                        <p>Conversation transcript will appear here.</p>
+                     </div>
+                  )}
+              </div>
+              <div className="flex flex-col items-center border-t border-border pt-6">
+                <p className={`text-sm h-5 mb-4 ${error ? 'text-red-500' : 'text-secondary-foreground/70'}`}>
+                  {statusMessage}
+                  {isSavingToDb && ' (Syncing to database...)'}
+                </p>
+                <button
+                  onClick={isConversing ? () => stopConversation() : startConversation}
+                  disabled={isConversing && callStatus !== CallStatus.Live && callStatus !== CallStatus.Connected}
+                  className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${isConversing ? 'bg-red-600 hover:bg-red-700 animate-pulse-glow' : 'bg-green-500 hover:bg-green-600'} disabled:bg-secondary disabled:cursor-not-allowed`}
+                  aria-label={isConversing ? 'End call' : 'Start call'}
+                >
+                  {isConversing ? <StopIcon className="w-8 h-8 text-white" /> : <MicIcon className="w-8 h-8 text-white" />}
+                </button>
+              </div>
+            </div>
+          </AuthGuard>
+        )}
       </div>
-      <SaveSessionModal 
+      
+      <SaveSessionModal
         isOpen={isSaveModalOpen}
         onSave={handleSaveSession}
         onClose={handleCloseSaveModal}
+        isLoading={isSavingToDb}
       />
     </div>
   );
