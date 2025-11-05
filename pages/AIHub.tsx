@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useSession } from '@clerk/clerk-react';
+import { createClerkSupabaseClient, saveSession } from '../services/supabaseService';
 // Fix: "LiveSession" is not an exported member of "@google/genai".
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { MicIcon, StopIcon } from '../components/icons/Icons';
@@ -88,6 +90,9 @@ const AIHub: React.FC = () => {
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [transcriptToSave, setTranscriptToSave] = useState<TranscriptionEntry[] | null>(null);
   
+  const { session } = useSession();
+  const supabase = useMemo(() => createClerkSupabaseClient(session), [session]);
+
   const transcriptionsRef = useRef(transcriptions);
   transcriptionsRef.current = transcriptions;
 
@@ -155,7 +160,8 @@ const AIHub: React.FC = () => {
     if (!isError && transcript.length > 0) {
       setTranscriptToSave(transcript);
       setIsSaveModalOpen(true);
-    } else {
+    } else if (isError) {
+      // Clear transcript on error to avoid confusion
       setTranscriptions([]);
     }
 
@@ -164,37 +170,35 @@ const AIHub: React.FC = () => {
     }
   }, [cleanupAudio]);
 
-  const handleSaveSession = (sessionName: string) => {
-    if (!transcriptToSave) return;
+  const handleSaveSession = async (sessionName: string) => {
+    if (!transcriptToSave || !supabase) return;
     try {
-      const newSession: SavedSession = {
-        id: crypto.randomUUID(),
-        name: sessionName,
-        timestamp: new Date().toISOString(),
-        transcript: transcriptToSave,
-      };
-      const existingSessions = JSON.parse(localStorage.getItem('aihub_sessions') || '[]') as SavedSession[];
-      localStorage.setItem('aihub_sessions', JSON.stringify([...existingSessions, newSession]));
+      await saveSession(supabase, sessionName, transcriptToSave);
+      handleNewSession(); // Clear transcript after saving
     } catch (e) {
       console.error("Failed to save session:", e);
-      setError("Could not save session. Local storage might be full or disabled.");
+      setError("Could not save session to the database.");
     } finally {
       setIsSaveModalOpen(false);
       setTranscriptToSave(null);
-      setTranscriptions([]);
     }
   };
   
   const handleCloseSaveModal = () => {
     setIsSaveModalOpen(false);
     setTranscriptToSave(null);
+  };
+
+  const handleNewSession = () => {
     setTranscriptions([]);
+    setCallStatus(CallStatus.Idle);
+    setError(null);
   };
 
   const startConversation = async () => {
     if (isConversing) return;
     
-    setTranscriptions([]);
+    handleNewSession(); // Always start with a clean state
     setError(null);
     setCallStatus(CallStatus.Initializing);
     setIsConversing(true);
@@ -240,7 +244,7 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
             setCallStatus(CallStatus.Connected);
 
             initialResponseTimerRef.current = window.setTimeout(() => {
-              setError('The AI did not respond in time. Please try again.');
+              setError('The AI did not respond in time. This may be a temporary issue. Please try again.');
               stopConversation(true);
             }, 8000);
 
@@ -249,13 +253,9 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
             mediaStreamSourceRef.current = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
             scriptProcessorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
             
-            // Wait for the session promise to resolve, then attach the audio processor.
-            // This prevents a race condition and the "can't access property then of null" error.
             sessionPromise.then(session => {
-                // Immediately send a prompt to make the AI speak first.
                 session?.sendRealtimeInput({ text: "Initiate the strategy session." });
 
-                // This is the core fix: `onaudioprocess` is only set *after* the session is ready.
                 if(scriptProcessorRef.current) {
                   scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
                     const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
@@ -279,8 +279,6 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
                 stopConversation(true);
             });
             
-            // Create a GainNode with gain set to 0. This is a standard workaround to keep the
-            // ScriptProcessorNode alive without causing audio feedback.
             const gainNode = audioContextRef.current.createGain();
             gainNode.gain.setValueAtTime(0, audioContextRef.current.currentTime);
             gainNode.connect(audioContextRef.current.destination);
@@ -336,7 +334,7 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
           },
           onerror: (e: ErrorEvent) => {
             console.error('API Error:', e);
-            setError(`Connection Error: ${e.message}. Please try again.`);
+            setError(`Connection to the AI was lost: ${e.message}. Please check your network and try again.`);
             stopConversation(true);
           },
           onclose: () => {
@@ -349,8 +347,25 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
 
     } catch (err) {
       console.error('Failed to start conversation:', err);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(`Could not start call. Check microphone permissions. Error: ${errorMessage}`);
+      let specificError = 'An unexpected error occurred while starting the call. Please try again.';
+
+      if (err instanceof Error) {
+          switch (err.name) {
+              case 'NotAllowedError':
+                  specificError = 'Microphone access denied. Please enable microphone permissions in your browser settings to use the AI Hub.';
+                  break;
+              case 'NotFoundError':
+                  specificError = 'No microphone found. Please ensure a microphone is connected and enabled.';
+                  break;
+              case 'NotReadableError':
+                  specificError = 'There was a hardware error with your microphone. Please check your device connection.';
+                  break;
+              default:
+                  specificError = `Could not start the call due to an initialization error: ${err.message}`;
+          }
+      }
+      
+      setError(specificError);
       stopConversation(true);
     }
   };
@@ -390,7 +405,17 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
              )}
           </div>
           <div className="flex flex-col items-center border-t border-border pt-6">
-            <p className={`text-sm h-5 mb-4 ${error ? 'text-red-500' : 'text-secondary-foreground/70'}`}>{statusMessage}</p>
+            <div className="relative flex justify-center items-center w-full h-5 mb-4">
+               <p className={`text-sm text-center ${error ? 'text-red-500' : 'text-secondary-foreground/70'}`}>{statusMessage}</p>
+                {!isConversing && transcriptions.length > 0 && (
+                  <button 
+                    onClick={handleNewSession}
+                    className="absolute right-0 text-sm font-semibold text-primary hover:underline"
+                  >
+                    New Session
+                  </button>
+                )}
+            </div>
             <button
               onClick={isConversing ? () => stopConversation() : startConversation}
               disabled={isConversing && callStatus !== CallStatus.Live && callStatus !== CallStatus.Connected}

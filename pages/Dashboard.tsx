@@ -1,32 +1,52 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useSession } from '@clerk/clerk-react';
+import { createClerkSupabaseClient, getSavedSessions, deleteSession as deleteSessionFromDb } from '../services/supabaseService';
 import { SavedSession } from '../types';
 import { BotIcon, UserIcon } from '../components/icons/Icons';
 
 const Dashboard: React.FC = () => {
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<SavedSession | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const { session } = useSession();
+  const supabase = useMemo(() => createClerkSupabaseClient(session), [session]);
 
   useEffect(() => {
-    try {
-      const storedSessions = JSON.parse(localStorage.getItem('aihub_sessions') || '[]') as SavedSession[];
-      // Sort sessions by date, newest first
-      storedSessions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      setSessions(storedSessions);
-      if (storedSessions.length > 0) {
-        setSelectedSession(storedSessions[0]);
+    const loadSessions = async () => {
+      if (!supabase) {
+        setIsLoading(false);
+        return;
+      };
+      setIsLoading(true);
+      try {
+        const storedSessions = await getSavedSessions(supabase);
+        setSessions(storedSessions);
+        if (storedSessions.length > 0) {
+          setSelectedSession(storedSessions[0]);
+        }
+      } catch (error) {
+        console.error("Failed to load sessions from Supabase:", error);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (error) {
-      console.error("Failed to load sessions from local storage:", error);
-    }
-  }, []);
+    };
+    loadSessions();
+  }, [supabase]);
 
-  const deleteSession = (sessionId: string) => {
+  const handleDeleteSession = async (sessionId: string) => {
+    if (!supabase) return;
     if (window.confirm("Are you sure you want to delete this session?")) {
-        const updatedSessions = sessions.filter(s => s.id !== sessionId);
-        setSessions(updatedSessions);
-        localStorage.setItem('aihub_sessions', JSON.stringify(updatedSessions));
-        if (selectedSession?.id === sessionId) {
-            setSelectedSession(updatedSessions.length > 0 ? updatedSessions[0] : null);
+        try {
+            await deleteSessionFromDb(supabase, sessionId);
+            const updatedSessions = sessions.filter(s => s.id !== sessionId);
+            setSessions(updatedSessions);
+            if (selectedSession?.id === sessionId) {
+                setSelectedSession(updatedSessions.length > 0 ? updatedSessions[0] : null);
+            }
+        } catch(error) {
+            console.error("Failed to delete session:", error);
+            // You might want to show an error message to the user here.
         }
     }
   }
@@ -40,7 +60,11 @@ const Dashboard: React.FC = () => {
         </p>
       </div>
 
-      {sessions.length === 0 ? (
+      {isLoading ? (
+        <div className="flex justify-center items-center h-40">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        </div>
+      ) : sessions.length === 0 ? (
         <div className="bg-card border border-border rounded-lg p-8 text-center">
             <h2 className="text-2xl font-semibold text-card-foreground">No Saved Sessions</h2>
             <p className="mt-4 text-secondary-foreground/70">
@@ -79,7 +103,7 @@ const Dashboard: React.FC = () => {
                         <p className="text-sm text-secondary-foreground/70">{new Date(selectedSession.timestamp).toLocaleString()}</p>
                     </div>
                     <button
-                        onClick={() => deleteSession(selectedSession.id)}
+                        onClick={() => handleDeleteSession(selectedSession.id)}
                         className="px-3 py-1 bg-red-600/20 text-red-400 rounded-md hover:bg-red-600/40 text-sm font-semibold transition-colors"
                     >
                         Delete

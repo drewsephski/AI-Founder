@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { View } from '../types';
 import { LogoIcon, MenuIcon, CloseIcon } from './icons/Icons';
+import { SignedIn, SignedOut, UserButton, SignInButton } from '@clerk/clerk-react';
 
 interface HeaderProps {
   currentView: View;
   setView: (view: View) => void;
+  userRole: string | null;
 }
 
-const Header: React.FC<HeaderProps> = ({ currentView, setView }) => {
+const Header: React.FC<HeaderProps> = ({ currentView, setView, userRole }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const navItems = [
@@ -15,6 +17,10 @@ const Header: React.FC<HeaderProps> = ({ currentView, setView }) => {
     { view: View.AIHub, label: 'AI Hub' },
     { view: View.Dashboard, label: 'Dashboard' },
   ];
+  
+  if (userRole === 'admin') {
+      navItems.push({ view: View.Admin, label: 'Admin' });
+  }
 
   const handleNavClick = (view: View) => {
     setView(view);
@@ -48,9 +54,16 @@ const Header: React.FC<HeaderProps> = ({ currentView, setView }) => {
               </nav>
             </div>
             <div className="flex items-center space-x-4">
-               <div className="relative w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-sm font-bold">
-                ME
-              </div>
+               <SignedIn>
+                 <UserButton afterSignOutUrl="/" />
+               </SignedIn>
+               <SignedOut>
+                 <SignInButton mode="modal">
+                   <button className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md font-semibold hover:bg-primary/90 transition-colors">
+                      Sign In
+                   </button>
+                 </SignInButton>
+               </SignedOut>
               {/* Mobile Menu Button */}
               <div className="md:hidden">
                 <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 text-foreground">
