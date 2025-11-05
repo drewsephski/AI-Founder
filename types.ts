@@ -4,17 +4,15 @@ export enum View {
   AIHub = 'aihub',
   Dashboard = 'dashboard',
   Admin = 'admin',
-  SignIn = 'sign-in',
-  SignUp = 'sign-up',
-  ToolChat = 'tool-chat',
-  ToolComplexQuery = 'tool-complex-query',
-  ToolImageEditor = 'tool-image-editor',
 }
 
 export enum ToolType {
   ImageEditor = 'Image Editor',
   ComplexQuery = 'Complex Query Analyzer',
   StandardChat = 'Standard Chatbot',
+  ImageGenerator = 'Image Generator',
+  VideoAnalyzer = 'Video Analyzer',
+  GoogleSearch = 'Google Search',
 }
 
 export type Tool = {
@@ -27,6 +25,7 @@ export type Tool = {
 export type ChatMessage = {
   role: 'user' | 'model';
   text: string;
+  sources?: { web: { uri: string; title: string } }[];
 };
 
 export type TranscriptionEntry = {

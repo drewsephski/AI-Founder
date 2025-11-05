@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { analyzeComplexQuery } from '../../services/geminiService';
-import { SendIcon, BotIcon, UserIcon } from '../../components/icons/Icons';
+import { searchWithGoogle } from '../../services/geminiService';
+import { SendIcon, BotIcon, UserIcon, LinkIcon } from '../../components/icons/Icons';
 import { ChatMessage } from '../../types';
 
-const ComplexQueryTool: React.FC = () => {
+const GoogleSearchTool: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -26,8 +26,8 @@ const ComplexQueryTool: React.FC = () => {
     setError(null);
 
     try {
-      const result = await analyzeComplexQuery(prompt);
-      const modelMessage: ChatMessage = { role: 'model', text: result };
+      const { text, sources } = await searchWithGoogle(prompt);
+      const modelMessage: ChatMessage = { role: 'model', text: text, sources: sources };
       setMessages((prev) => [...prev, modelMessage]);
     } catch (err) {
       setError('Failed to get a response. Please try again.');
@@ -35,12 +35,12 @@ const ComplexQueryTool: React.FC = () => {
       setIsLoading(false);
     }
   }, [prompt]);
-  
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          handleSubmit();
-      }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
   };
 
   return (
@@ -51,6 +51,20 @@ const ComplexQueryTool: React.FC = () => {
             {msg.role === 'model' && <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center"><BotIcon className="w-5 h-5" /></div>}
             <div className={`p-3 rounded-lg max-w-lg ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
               <p className="whitespace-pre-wrap">{msg.text}</p>
+              {msg.sources && msg.sources.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-border/50">
+                  <h4 className="text-xs font-semibold mb-2 flex items-center gap-1.5"><LinkIcon className="w-3 h-3" /> Sources:</h4>
+                  <ul className="space-y-1">
+                    {msg.sources.map((source, i) => (
+                      <li key={i}>
+                        <a href={source.web.uri} target="_blank" rel="noopener noreferrer" className="text-xs text-primary/80 hover:underline break-all">
+                          {i + 1}. {source.web.title}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
             {msg.role === 'user' && <div className="flex-shrink-0 w-8 h-8 rounded-full bg-accent flex items-center justify-center"><UserIcon className="w-5 h-5" /></div>}
           </div>
@@ -59,7 +73,7 @@ const ComplexQueryTool: React.FC = () => {
           <div className="flex items-start gap-3">
             <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center"><BotIcon className="w-5 h-5" /></div>
             <div className="p-3 rounded-lg bg-secondary flex items-center space-x-2">
-              <span className="text-sm">Thinking...</span>
+              <span className="text-sm">Searching...</span>
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary"></div>
             </div>
           </div>
@@ -73,7 +87,7 @@ const ComplexQueryTool: React.FC = () => {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a complex question..."
+            placeholder="Ask a question..."
             className="w-full p-3 pr-12 bg-secondary border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none transition resize-none"
             rows={2}
             disabled={isLoading}
@@ -91,4 +105,4 @@ const ComplexQueryTool: React.FC = () => {
   );
 };
 
-export default ComplexQueryTool;
+export default GoogleSearchTool;

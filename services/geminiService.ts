@@ -76,3 +76,70 @@ export const getStandardChatStream = async (
     throw error;
   }
 };
+
+export const generateImage = async (prompt: string, aspectRatio: string): Promise<string> => {
+  try {
+    const response = await ai.models.generateImages({
+      model: 'imagen-4.0-generate-001',
+      prompt: prompt,
+      config: {
+        numberOfImages: 1,
+        outputMimeType: 'image/png',
+        aspectRatio: aspectRatio,
+      },
+    });
+
+    if (response.generatedImages && response.generatedImages.length > 0) {
+      return response.generatedImages[0].image.imageBytes;
+    }
+    throw new Error("No image data found in response");
+  } catch (error) {
+    console.error("Error generating image:", error);
+    throw error;
+  }
+};
+
+export const analyzeVideo = async (
+  prompt: string,
+  videoFrames: { mimeType: string, data: string }[]
+): Promise<string> => {
+  try {
+    const imageParts = videoFrames.map(frame => ({
+      inlineData: {
+        mimeType: frame.mimeType,
+        data: frame.data,
+      },
+    }));
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-pro',
+      contents: {
+        parts: [
+          { text: prompt },
+          ...imageParts
+        ],
+      },
+    });
+    return response.text;
+  } catch (error) {
+    console.error("Error analyzing video:", error);
+    throw error;
+  }
+};
+
+export const searchWithGoogle = async (prompt: string): Promise<{ text: string; sources: any[] }> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
+    });
+    const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    return { text: response.text, sources };
+  } catch (error) {
+    console.error("Error with Google Search query:", error);
+    throw error;
+  }
+};
