@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { SignedIn, SignedOut, useAuth, useSession } from '@clerk/clerk-react';
+import React, { useState, createContext, useEffect, ReactNode } from 'react';
 import { View } from './types';
 import Header from './components/Header';
 import Homepage from './pages/Homepage';
@@ -7,80 +6,106 @@ import Marketplace from './pages/Marketplace';
 import AIHub from './pages/AIHub';
 import Dashboard from './pages/Dashboard';
 import Admin from './pages/Admin';
-import { createClerkSupabaseClient, getUserRole } from './services/supabaseService';
+import Pricing from './pages/Pricing';
+import CheckoutPage from './pages/CheckoutPage';
+import AuthPage from './pages/AuthPage'; // New import for AuthPage
+import { UserProvider, useUser } from './UserContext'; // Import useUser
 
-const App: React.FC = () => {
+interface AppViewContextType {
+  setView: (view: View) => void;
+}
+export const AppViewContext = createContext<AppViewContextType | undefined>(undefined);
+
+// Wrapper component to use the context
+const AppContent: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>(View.Home);
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const { authenticated, loadingAuth } = useUser();
 
-  const { isSignedIn } = useAuth();
-  const { session } = useSession();
-  const supabase = useMemo(() => createClerkSupabaseClient(session), [session]);
-
+  // Effect to handle initial view based on URL parameters
   useEffect(() => {
-    const fetchRole = async () => {
-      if (isSignedIn && supabase) {
-        const role = await getUserRole(supabase);
-        setUserRole(role);
-      } else {
-        setUserRole(null);
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get('view');
+    if (viewParam && Object.values(View).includes(viewParam as View)) {
+      setCurrentView(viewParam as View);
+    } else {
+      // Default to home or auth based on authentication status
+      if (!authenticated && !loadingAuth) {
+        setCurrentView(View.Auth);
+      }
+    }
+  }, [authenticated, loadingAuth]);
+
+  // Handle URL changes to update view for internal navigation (e.g., from Paddle redirects)
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const viewParam = params.get('view');
+      if (viewParam && Object.values(View).includes(viewParam as View)) {
+        setCurrentView(viewParam as View);
       }
     };
-    fetchRole();
-  }, [isSignedIn, supabase]);
-
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const renderView = () => {
+    if (loadingAuth) {
+      return (
+        <div className="flex items-center justify-center min-h-[calc(100vh-64px)] text-secondary-foreground">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+          <p className="ml-4">Loading authentication...</p>
+        </div>
+      );
+    }
+
+    // Define protected routes
+    const protectedViews = [View.AIHub, View.Dashboard, View.Admin, View.Pricing, View.Checkout];
+
+    if (!authenticated && protectedViews.includes(currentView)) {
+      // If not authenticated and trying to access a protected view, redirect to Auth
+      setCurrentView(View.Auth);
+      return <AuthPage />;
+    }
+
     switch (currentView) {
       case View.Home:
         return <Homepage setView={setCurrentView} />;
       case View.Marketplace:
         return <Marketplace />;
       case View.AIHub:
+        return <AIHub />;
       case View.Dashboard:
-        return (
-          <>
-            <SignedIn>
-              {currentView === View.AIHub && <AIHub />}
-              {currentView === View.Dashboard && <Dashboard />}
-            </SignedIn>
-            <SignedOut>
-              <div className="container mx-auto px-4 py-24 text-center">
-                <h2 className="text-2xl font-bold">Authentication Required</h2>
-                <p className="mt-4 text-lg text-secondary-foreground/80">
-                  Please sign in to access the {currentView === View.AIHub ? 'AI Hub' : 'Dashboard'}.
-                </p>
-              </div>
-            </SignedOut>
-          </>
-        );
+        return <Dashboard />;
       case View.Admin:
-        return (
-           <SignedIn>
-              {userRole === 'admin' ? (
-                <Admin />
-              ) : (
-                 <div className="container mx-auto px-4 py-24 text-center">
-                    <h2 className="text-2xl font-bold">Access Denied</h2>
-                    <p className="mt-4 text-lg text-secondary-foreground/80">
-                      You do not have permission to view this page.
-                    </p>
-                  </div>
-              )}
-           </SignedIn>
-        )
+         return <Admin />;
+      case View.Pricing:
+        return <Pricing />;
+      case View.Checkout:
+        return <CheckoutPage />;
+      case View.Auth: // New case for Auth page
+        return <AuthPage />;
       default:
         return <Homepage setView={setCurrentView} />;
     }
   };
 
   return (
-    <div className="bg-background min-h-screen text-foreground font-sans">
-      <Header currentView={currentView} setView={setCurrentView} userRole={userRole} />
-      <div className="pt-16">
-        {renderView()}
+    <AppViewContext.Provider value={{ setView: setCurrentView }}>
+      <div className="bg-background min-h-screen text-foreground font-sans">
+        <Header currentView={currentView} setView={setCurrentView} />
+        <div className="pt-16">
+          {renderView()}
+        </div>
       </div>
-    </div>
+    </AppViewContext.Provider>
+  );
+};
+
+const App: React.FC = () => {
+  return (
+    <UserProvider>
+      <AppContent />
+    </UserProvider>
   );
 };
 

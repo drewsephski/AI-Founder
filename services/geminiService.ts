@@ -1,10 +1,12 @@
 import { GoogleGenAI, GenerateContentResponse, Modality } from "@google/genai";
 
-if (!process.env.API_KEY) {
+// Changed to process.env.API_KEY
+if (!process.env.API_KEY) { 
   throw new Error("API_KEY environment variable not set");
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Changed to process.env.API_KEY
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY }); 
 
 export const editImage = async (
   prompt: string,

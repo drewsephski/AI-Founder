@@ -1,6 +1,23 @@
-import React from 'react';
+import React, { useContext } from 'react';
+import { useUser } from '../UserContext';
+import { View } from '../types';
+import { AppViewContext } from '../App';
 
 const Admin: React.FC = () => {
+  const { authenticated } = useUser();
+  const { setView } = useContext(AppViewContext)!;
+
+  if (!authenticated) {
+    return (
+      <div className="container mx-auto px-4 py-24 flex flex-col items-center justify-center min-h-[50vh] text-center">
+        <h1 className="text-3xl font-bold text-red-400 mb-4">Access Denied</h1>
+        <p className="text-lg text-secondary-foreground/80">
+          Please <button onClick={() => setView(View.Auth)} className="text-primary hover:underline">log in</button> to access the Admin Panel.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-24">
       <div className="text-center mb-12">

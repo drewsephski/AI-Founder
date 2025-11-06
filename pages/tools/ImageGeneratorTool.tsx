@@ -1,5 +1,8 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useContext } from 'react';
 import { generateImage } from '../../services/geminiService';
+import { useUser } from '../../UserContext';
+import { View } from '../../types';
+import { AppViewContext } from '../../App';
 
 const ImageGeneratorTool: React.FC = () => {
   const [prompt, setPrompt] = useState('');
@@ -7,7 +10,6 @@ const ImageGeneratorTool: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Advanced options state
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const [style, setStyle] = useState('photorealistic');
@@ -16,11 +18,27 @@ const ImageGeneratorTool: React.FC = () => {
   const aspectRatios = ['1:1', '16:9', '9:16', '4:3', '3:4'];
   const styles = ['photorealistic', 'cartoon', 'anime', 'abstract', 'fantasy', 'minimalist'];
 
+  const { userPlan, usageLimits, decrementImageGenerations, authenticated } = useUser();
+  const { setView } = useContext(AppViewContext)!;
+
+  const isProPlan = userPlan === 'pro';
+  const hasImageGenerationsLeft = usageLimits.imageGenerations > 0;
+  const canGenerateImages = authenticated && (userPlan === 'advanced' || (isProPlan && hasImageGenerationsLeft));
+
   const handleSubmit = useCallback(async () => {
     if (!prompt.trim()) {
       setError('Please enter a prompt.');
       return;
     }
+    if (!authenticated) {
+      setError("Please log in to generate images.");
+      return;
+    }
+    if (!canGenerateImages) {
+      setError(isProPlan ? "You've reached your daily image generation limit. Upgrade to Advanced for unlimited access!" : "Your current plan does not allow image generation. Upgrade to Pro or Advanced.");
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     setGeneratedImage(null);
@@ -36,12 +54,16 @@ const ImageGeneratorTool: React.FC = () => {
       
       const resultBase64 = await generateImage(finalPrompt, aspectRatio);
       setGeneratedImage(`data:image/png;base64,${resultBase64}`);
+
+      if (isProPlan) {
+        await decrementImageGenerations(); // Decrement after successful generation for Pro plan
+      }
     } catch (err) {
       setError('Failed to generate image. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, aspectRatio, style, negativePrompt]);
+  }, [prompt, aspectRatio, style, negativePrompt, canGenerateImages, isProPlan, decrementImageGenerations, authenticated]);
   
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -70,10 +92,28 @@ const ImageGeneratorTool: React.FC = () => {
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="e.g., An astronaut riding a horse on Mars"
-          className="w-full p-3 bg-secondary border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none transition"
+          className={`w-full p-3 bg-secondary border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none transition ${!canGenerateImages ? 'opacity-50 cursor-not-allowed' : ''}`}
           rows={3}
-          disabled={isLoading}
+          disabled={isLoading || !canGenerateImages}
         />
+
+        {authenticated ? (
+          isProPlan && (
+            <p className={`text-sm ${hasImageGenerationsLeft ? 'text-secondary-foreground/70' : 'text-red-400'}`}>
+              {hasImageGenerationsLeft ? `You have ${usageLimits.imageGenerations} image generations left today.` : "You've reached your daily image generation limit. Upgrade to Advanced for unlimited access!"}
+            </p>
+          )
+        ) : (
+          <p className="text-sm text-yellow-400">
+            Please <button onClick={() => setView(View.Auth)} className="text-primary hover:underline">log in</button> to generate images.
+          </p>
+        )}
+        {!authenticated && (userPlan === 'starter') && (
+          <p className="text-sm text-yellow-400">
+            Image generation is available on Pro and Advanced plans. Upgrade to access!
+          </p>
+        )}
+        
 
         {/* Advanced Options */}
         <div>
@@ -90,7 +130,8 @@ const ImageGeneratorTool: React.FC = () => {
                     <button
                       key={ar}
                       onClick={() => setAspectRatio(ar)}
-                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${aspectRatio === ar ? 'bg-primary text-primary-foreground' : 'bg-accent hover:bg-border'}`}
+                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${aspectRatio === ar ? 'bg-primary text-primary-foreground' : 'bg-accent hover:bg-border'} ${!canGenerateImages ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={!canGenerateImages}
                     >
                       {ar}
                     </button>
@@ -105,7 +146,8 @@ const ImageGeneratorTool: React.FC = () => {
                   id="style-select"
                   value={style}
                   onChange={(e) => setStyle(e.target.value)}
-                  className="w-full p-2 bg-accent border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none"
+                  className={`w-full p-2 bg-accent border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none ${!canGenerateImages ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={!canGenerateImages}
                 >
                   {styles.map(s => <option key={s} value={s} className="capitalize">{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
                 </select>
@@ -120,8 +162,8 @@ const ImageGeneratorTool: React.FC = () => {
                   value={negativePrompt}
                   onChange={(e) => setNegativePrompt(e.target.value)}
                   placeholder="e.g., text, watermarks, blurry"
-                  className="w-full p-2 bg-accent border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none"
-                  disabled={isLoading}
+                  className={`w-full p-2 bg-accent border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none ${!canGenerateImages ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={isLoading || !canGenerateImages}
                 />
               </div>
             </div>
@@ -131,8 +173,8 @@ const ImageGeneratorTool: React.FC = () => {
         <div className="flex justify-end">
             <button
             onClick={handleSubmit}
-            disabled={isLoading || !prompt.trim()}
-            className="px-6 py-2 bg-primary text-primary-foreground rounded-md font-semibold hover:bg-primary/90 disabled:bg-secondary disabled:text-secondary-foreground/50 transition-colors"
+            disabled={isLoading || !prompt.trim() || !canGenerateImages}
+            className={`px-6 py-2 bg-primary text-primary-foreground rounded-md font-semibold hover:bg-primary/90 disabled:bg-secondary disabled:text-secondary-foreground/50 transition-colors ${!canGenerateImages ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
             {isLoading ? 'Processing...' : 'Generate'}
             </button>

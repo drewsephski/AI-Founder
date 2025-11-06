@@ -1,13 +1,18 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { getStandardChatStream } from '../../services/geminiService';
 import { SendIcon, BotIcon, UserIcon, MicIcon, StopIcon } from '../../components/icons/Icons';
-import { ChatMessage } from '../../types';
+import { ChatMessage, View } from '../../types';
+import { useUser } from '../../UserContext';
+import { useContext } from 'react';
+import { AppViewContext } from '../../App';
+
 
 // Extend window type for SpeechRecognition API
 declare global {
   interface Window {
     SpeechRecognition: any;
     webkitSpeechRecognition: any;
+    isSecureContext: boolean;
   }
 }
 
@@ -21,6 +26,13 @@ const StandardChatTool: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any | null>(null);
 
+  const { userPlan, usageLimits, decrementAIChatGenerations, authenticated } = useUser();
+  const { setView } = useContext(AppViewContext)!;
+  const isStarterPlan = userPlan === 'starter';
+  const hasChatGenerationsLeft = usageLimits.aiChatGenerations > 0;
+  const canChat = authenticated && ((isStarterPlan && hasChatGenerationsLeft) || userPlan !== 'starter');
+
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -28,7 +40,14 @@ const StandardChatTool: React.FC = () => {
   useEffect(scrollToBottom, [messages]);
 
   const handleSubmit = useCallback(async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || !canChat) {
+      if (!authenticated) {
+        setError("Please log in to use the AI Chatbot.");
+      } else if (isStarterPlan && !hasChatGenerationsLeft) {
+        setError("You've reached your daily chat limit. Upgrade for more!");
+      }
+      return;
+    }
 
     const userMessage: ChatMessage = { role: 'user', text: input };
     setMessages((prev) => [...prev, userMessage]);
@@ -40,7 +59,7 @@ const StandardChatTool: React.FC = () => {
     setMessages((prev) => [...prev, { role: 'model', text: '' }]);
 
     try {
-      const history = messages.map(msg => ({
+      const history = messages.slice(0, -1).map(msg => ({ // Exclude the placeholder message from history
         role: msg.role,
         parts: [{ text: msg.text }]
       }));
@@ -55,6 +74,9 @@ const StandardChatTool: React.FC = () => {
             return newMessages;
         });
       }
+      if (isStarterPlan) {
+        await decrementAIChatGenerations(); // Decrement after successful generation for starter plan
+      }
 
     } catch (err) {
       setError('Failed to get a response. Please try again.');
@@ -62,7 +84,7 @@ const StandardChatTool: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [input, messages]);
+  }, [input, messages, canChat, isStarterPlan, decrementAIChatGenerations, authenticated, hasChatGenerationsLeft]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -74,6 +96,14 @@ const StandardChatTool: React.FC = () => {
   const handleMicClick = useCallback(() => {
     if (isRecording) {
       recognitionRef.current?.stop();
+      return;
+    }
+    if (!canChat) {
+      if (!authenticated) {
+        setError("Please log in to use the AI Chatbot.");
+      } else if (isStarterPlan && !hasChatGenerationsLeft) {
+        setError("You've reached your daily chat limit. Upgrade for more!");
+      }
       return;
     }
 
@@ -108,12 +138,25 @@ const StandardChatTool: React.FC = () => {
     };
 
     recognition.onerror = (event: any) => {
-      setError(`Speech recognition error: ${event.error}`);
+      if (event.error === 'not-allowed' && !window.isSecureContext) {
+        setError('Speech recognition requires a secure context (HTTPS). Please ensure you are accessing the app over HTTPS or on localhost.');
+      } else {
+        setError(`Speech recognition error: ${event.error}`);
+      }
       setIsRecording(false);
     };
 
-    recognition.start();
-  }, [isRecording]);
+    try {
+        recognition.start();
+    } catch (e: any) {
+        if (e.name === 'SecurityError') {
+            setError('Speech recognition requires a secure context (HTTPS). Please ensure you are accessing the app over HTTPS or on localhost.');
+        } else {
+            setError(`Failed to start speech recognition: ${e.message}`);
+        }
+        setIsRecording(false);
+    }
+  }, [isRecording, canChat, isStarterPlan, authenticated, hasChatGenerationsLeft]);
 
   useEffect(() => {
     return () => {
@@ -138,19 +181,30 @@ const StandardChatTool: React.FC = () => {
       </div>
       <div className="p-4 border-t border-border">
         {error && <p className="text-red-500 text-sm mb-2">{error}</p>}
+        {authenticated ? (
+          isStarterPlan && (
+            <p className={`text-sm mb-2 ${hasChatGenerationsLeft ? 'text-secondary-foreground/70' : 'text-red-400'}`}>
+              {hasChatGenerationsLeft ? `You have ${usageLimits.aiChatGenerations} AI Chat generations left today.` : "You've reached your daily chat limit. Upgrade for more!"}
+            </p>
+          )
+        ) : (
+          <p className="text-sm mb-2 text-yellow-400">
+            Please <button onClick={() => setView(View.Auth)} className="text-primary hover:underline">log in</button> to use the AI Chatbot.
+          </p>
+        )}
         <div className="relative">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={isRecording ? "Listening..." : "Type your message..."}
-            className="w-full p-3 pr-24 bg-secondary border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none transition resize-none"
+            className={`w-full p-3 pr-24 bg-secondary border border-border rounded-md focus:ring-2 focus:ring-primary focus:outline-none transition resize-none ${!canChat ? 'opacity-50 cursor-not-allowed' : ''}`}
             rows={2}
-            disabled={isLoading}
+            disabled={isLoading || !canChat}
           />
           <button
             onClick={handleMicClick}
-            disabled={isLoading}
+            disabled={isLoading || !canChat}
             className={`absolute right-14 top-1/2 -translate-y-1/2 p-2 rounded-full transition-colors disabled:bg-secondary disabled:text-secondary-foreground/50 ${
               isRecording 
                 ? 'bg-red-500 text-white animate-pulse' 
@@ -162,8 +216,8 @@ const StandardChatTool: React.FC = () => {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={isLoading || !input.trim()}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-secondary disabled:text-secondary-foreground/50 transition-colors"
+            disabled={isLoading || !input.trim() || !canChat}
+            className={`absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-secondary disabled:text-secondary-foreground/50 transition-colors ${!canChat ? 'opacity-50 cursor-not-allowed' : ''}`}
             aria-label="Send message"
           >
             <SendIcon className="w-5 h-5" />

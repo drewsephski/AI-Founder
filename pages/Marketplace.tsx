@@ -1,9 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
-// FIX: Import `useClerk` to get access to the `openSignIn` function.
-import { useAuth, useSession, useClerk } from '@clerk/clerk-react';
-import { createClerkSupabaseClient, getFavorites, getUsageData, toggleFavorite, incrementToolUsage } from '../services/supabaseService';
+import React, { useState, useContext } from 'react';
 import { TOOLS } from '../constants';
-import { Tool, ToolType } from '../types';
+import { Tool, ToolType, UserPlan, View } from '../types';
 import ToolModal from '../components/ToolModal';
 import ImageEditorTool from './tools/ImageEditorTool';
 import ComplexQueryTool from './tools/ComplexQueryTool';
@@ -12,71 +9,70 @@ import ImageGeneratorTool from './tools/ImageGeneratorTool';
 import VideoAnalyzerTool from './tools/VideoAnalyzerTool';
 import GoogleSearchTool from './tools/GoogleSearchTool';
 import { StarIcon } from '../components/icons/Icons';
-
-const DAILY_USAGE_LIMIT = 5;
+import { useUser } from '../UserContext';
+import { AppViewContext } from '../App';
+import { toggleFavorite } from '../services/supabaseService';
 
 const Marketplace: React.FC = () => {
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
-  const [favorites, setFavorites] = useState<ToolType[]>([]);
-  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-  const [usageData, setUsageData] = useState<Record<ToolType, number>>({} as Record<ToolType, number>);
+  const { userPlan, canAccessTool, authenticated, user } = useUser();
+  const { setView } = useContext(AppViewContext)!;
+  const [userFavorites, setUserFavorites] = useState<ToolType[]>([]); // To store user's favorites
 
-  // FIX: `openSignIn` is not available on `useAuth`. It should be retrieved from `useClerk`.
-  const { isSignedIn } = useAuth();
-  const { openSignIn } = useClerk();
-  const { session } = useSession();
-  const supabase = useMemo(() => createClerkSupabaseClient(session), [session]);
-
-  useEffect(() => {
-    const loadData = async () => {
-      if (supabase && isSignedIn) {
-        try {
-          const [favs, usage] = await Promise.all([
-            getFavorites(supabase),
-            getUsageData(supabase)
-          ]);
-          setFavorites(favs);
-          setUsageData(usage);
-        } catch (error) {
-          console.error('Failed to load user data from Supabase:', error);
-        }
-      } else {
-        // Clear data when user signs out
-        setFavorites([]);
-        setUsageData({} as Record<ToolType, number>);
-      }
-    };
-    loadData();
-  }, [supabase, isSignedIn]);
-
-  const handleToolLaunch = async (tool: Tool) => {
-    if (isSignedIn && supabase) {
-      const currentUsage = usageData[tool.type] || 0;
-      if (currentUsage >= DAILY_USAGE_LIMIT) {
-        return; // Do nothing if limit is reached
-      }
-      const { error } = await incrementToolUsage(supabase, tool.type);
-      if (!error) {
-        setUsageData(prev => ({ ...prev, [tool.type]: (prev[tool.type] || 0) + 1 }));
-      }
+  const handleToolLaunch = (tool: Tool) => {
+    if (!authenticated && tool.requiredPlan && tool.requiredPlan !== 'starter') {
+      alert("Please log in or register to access this tool."); // Replace with a more elegant solution
+      setView(View.Auth);
+      return;
     }
     setSelectedTool(tool);
   };
 
-  const handleToggleFavorite = async (toolType: ToolType) => {
-    if (!isSignedIn) {
-      openSignIn();
+  const handleToggleFavorite = async (toolType: ToolType, isCurrentlyFavorite: boolean) => {
+    if (!authenticated || !user?.id) {
+      alert("Please sign in to manage your favorites.");
+      setView(View.Auth);
       return;
     }
-    if (!supabase) return;
-
-    const isCurrentlyFavorite = favorites.includes(toolType);
-    await toggleFavorite(supabase, toolType, isCurrentlyFavorite);
-    setFavorites(prev => isCurrentlyFavorite ? prev.filter(t => t !== toolType) : [...prev, toolType]);
+    try {
+      await toggleFavorite(user.id, toolType, !isCurrentlyFavorite);
+      if (!isCurrentlyFavorite) {
+        setUserFavorites(prev => [...prev, toolType]);
+      } else {
+        setUserFavorites(prev => prev.filter(fav => fav !== toolType));
+      }
+    } catch (error) {
+      console.error("Failed to toggle favorite:", error);
+      alert("Failed to update favorites. Please try again.");
+    }
   };
 
   const renderToolComponent = () => {
     if (!selectedTool) return null;
+
+    const hasAccess = canAccessTool(selectedTool.requiredPlan);
+
+    if (!hasAccess) {
+      return (
+        <div className="text-center p-8">
+          <h3 className="text-2xl font-semibold text-card-foreground mb-4">Upgrade Required</h3>
+          <p className="text-secondary-foreground/80 mb-6">
+            This feature requires the {selectedTool.requiredPlan?.charAt(0)?.toUpperCase() + selectedTool.requiredPlan?.slice(1)} Plan.
+            Please upgrade your subscription to access this tool.
+          </p>
+          <button
+            onClick={() => {
+              setView(View.Pricing);
+              setSelectedTool(null);
+            }}
+            className="px-6 py-2 bg-primary text-primary-foreground rounded-md font-semibold hover:bg-primary/90 transition-colors"
+          >
+            Go to Pricing
+          </button>
+        </div>
+      );
+    }
+
     switch (selectedTool.type) {
       case ToolType.ImageEditor:
         return <ImageEditorTool />;
@@ -95,9 +91,19 @@ const Marketplace: React.FC = () => {
     }
   };
 
-  const displayedTools = showFavoritesOnly
-    ? TOOLS.filter(tool => favorites.includes(tool.type))
-    : TOOLS;
+  const displayedTools = TOOLS;
+
+  const getPlanLabel = (plan: UserPlan | undefined) => {
+    if (!plan || plan === 'starter') return 'Free';
+    return plan.charAt(0).toUpperCase() + plan.slice(1);
+  };
+
+  const getPlanClass = (plan: UserPlan | undefined) => {
+    if (!plan || plan === 'starter') return 'text-success';
+    if (plan === 'pro') return 'text-blue-400';
+    if (plan === 'advanced') return 'text-purple-400';
+    return 'text-secondary-foreground/60';
+  };
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-24">
@@ -108,70 +114,49 @@ const Marketplace: React.FC = () => {
         </p>
       </div>
 
-      {isSignedIn && (
-        <div className="flex justify-end items-center mb-8">
-          <label htmlFor="favorites-toggle" className="flex items-center cursor-pointer">
-            <span className="mr-3 text-sm font-medium">Show Favorites</span>
-            <div className="relative">
-              <input type="checkbox" id="favorites-toggle" className="sr-only" checked={showFavoritesOnly} onChange={() => setShowFavoritesOnly(!showFavoritesOnly)} />
-              <div className="block bg-secondary w-14 h-8 rounded-full"></div>
-              <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${showFavoritesOnly ? 'translate-x-6 bg-primary' : ''}`}></div>
-            </div>
-          </label>
-        </div>
-      )}
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {displayedTools.map((tool) => {
-          const currentUsage = usageData[tool.type] || 0;
-          const limitReached = isSignedIn && currentUsage >= DAILY_USAGE_LIMIT;
+          const accessGranted = canAccessTool(tool.requiredPlan);
+          const planRequiredLabel = getPlanLabel(tool.requiredPlan);
+          const planRequiredClass = getPlanClass(tool.requiredPlan);
+          const isFavorite = userFavorites.includes(tool.type);
 
           return (
             <div
               key={tool.title}
-              className={`bg-card border border-border rounded-lg p-6 flex flex-col transition-all relative group ${
-                limitReached 
-                ? 'opacity-60 cursor-not-allowed' 
-                : 'hover:border-primary/50 cursor-pointer'
+              className={`bg-card border rounded-lg p-6 flex flex-col transition-all relative group ${
+                accessGranted
+                  ? 'hover:border-primary/50 cursor-pointer'
+                  : 'opacity-60 cursor-not-allowed border-dashed border-secondary-foreground/30'
               }`}
-              onClick={() => !limitReached && handleToolLaunch(tool)}
+              onClick={() => handleToolLaunch(tool)}
             >
               <button
                   onClick={(e) => {
                       e.stopPropagation();
-                      handleToggleFavorite(tool.type);
+                      handleToggleFavorite(tool.type, isFavorite);
                   }}
-                  className="absolute top-4 right-4 p-2 rounded-full text-secondary-foreground/50 hover:text-yellow-400 transition-colors z-10"
-                  aria-label={favorites.includes(tool.type) ? 'Remove from favorites' : 'Add to favorites'}
+                  className={`absolute top-4 right-4 p-2 rounded-full transition-colors z-10 ${isFavorite ? 'text-yellow-400' : 'text-secondary-foreground/50 hover:text-yellow-400'}`}
+                  aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
               >
-                  <StarIcon filled={favorites.includes(tool.type)} className={`w-6 h-6 ${favorites.includes(tool.type) ? 'text-yellow-400' : ''}`} />
+                  <StarIcon filled={isFavorite} className="w-6 h-6" />
               </button>
               <div className="flex-grow">
-                <span className="text-sm font-medium text-primary">{tool.category}</span>
+                <span className={`text-sm font-medium ${tool.requiredPlan ? planRequiredClass : 'text-primary'}`}>{tool.category}</span>
                 <h3 className="text-xl font-semibold mt-2 text-card-foreground">{tool.title}</h3>
                 <p className="mt-2 text-secondary-foreground/70">{tool.description}</p>
               </div>
               <div className="mt-6 flex justify-between items-center">
                   <span className="text-xs font-semibold text-secondary-foreground/60">
-                      {isSignedIn ? `Daily Launches: ${currentUsage} / ${DAILY_USAGE_LIMIT}` : 'Usage tracked on sign-in'}
+                      {tool.requiredPlan ? (accessGranted ? 'Access Granted' : `Requires ${planRequiredLabel} Plan`) : 'Free Access'}
                   </span>
-                  <span className={`font-semibold text-sm ${
-                      limitReached 
-                      ? 'text-red-400' 
-                      : 'text-primary group-hover:underline'
-                  }`}>
-                      {limitReached ? 'Limit Reached' : 'Launch Tool →'}
+                  <span className="font-semibold text-sm text-primary group-hover:underline">
+                      {accessGranted ? 'Launch Tool →' : 'View Plan →'}
                   </span>
               </div>
             </div>
-          )
+          );
         })}
-         {displayedTools.length === 0 && showFavoritesOnly && (
-            <div className="md:col-span-2 lg:col-span-3 text-center py-16 bg-card border border-border rounded-lg">
-                <p className="text-secondary-foreground">You haven't favorited any tools yet.</p>
-                <p className="text-sm text-secondary-foreground/60 mt-2">Click the star on a tool to add it here.</p>
-            </div>
-        )}
       </div>
 
       <ToolModal

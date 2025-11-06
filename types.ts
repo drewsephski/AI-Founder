@@ -4,7 +4,12 @@ export enum View {
   AIHub = 'aihub',
   Dashboard = 'dashboard',
   Admin = 'admin',
+  Pricing = 'pricing',
+  Checkout = 'checkout',
+  Auth = 'auth', // Added new view for authentication
 }
+
+export type UserPlan = 'starter' | 'pro' | 'advanced';
 
 export enum ToolType {
   ImageEditor = 'Image Editor',
@@ -20,6 +25,7 @@ export type Tool = {
   title: string;
   description: string;
   category: string;
+  requiredPlan?: UserPlan;
 };
 
 export type ChatMessage = {

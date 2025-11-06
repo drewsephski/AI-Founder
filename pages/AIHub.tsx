@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useSession } from '@clerk/clerk-react';
-import { createClerkSupabaseClient, saveSession } from '../services/supabaseService';
-// Fix: "LiveSession" is not an exported member of "@google/genai".
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { saveSession, getSavedSessions } from '../services/supabaseService';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
-import { MicIcon, StopIcon } from '../components/icons/Icons';
-import { TranscriptionEntry, SavedSession } from '../types';
+import { MicIcon, StopIcon, TrashIcon } from '../components/icons/Icons';
+import { TranscriptionEntry, View } from '../types';
 import SaveSessionModal from '../components/SaveSessionModal';
+import { useUser } from '../UserContext';
+import { useContext } from 'react';
+import { AppViewContext } from '../App';
+
 
 // Audio helper functions
 function encode(bytes: Uint8Array): string {
@@ -17,7 +19,6 @@ function encode(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-// FIX: Add missing audio decoding functions
 function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -48,7 +49,6 @@ async function decodeAudioData(
 }
 
 
-// FIX: Replace broken code block with a functional audio resampling implementation
 function resampleBuffer(inputBuffer: Float32Array, fromSampleRate: number, toSampleRate: number): Float32Array {
   if (fromSampleRate === toSampleRate) {
     return inputBuffer;
@@ -80,7 +80,12 @@ enum CallStatus {
   Connected = 'Connected. Waiting for AI...',
   Live = 'Mic is open. You can speak at any time.',
   Ending = 'Call ended. Ready to start a new call.',
+  UpgradeRequired = 'Upgrade to Pro or Advanced plan to access the AI Cofounder.',
+  ProRateLimited = 'Pro Plan: Voice agent usage limits apply.',
+  LoginRequired = 'Please log in to use the AI Cofounder.',
 }
+
+const AI_VOICES = ['Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir'];
 
 const AIHub: React.FC = () => {
   const [isConversing, setIsConversing] = useState(false);
@@ -89,14 +94,15 @@ const AIHub: React.FC = () => {
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [transcriptToSave, setTranscriptToSave] = useState<TranscriptionEntry[] | null>(null);
+  const [voice, setVoice] = useState('Zephyr');
   
-  const { session } = useSession();
-  const supabase = useMemo(() => createClerkSupabaseClient(session), [session]);
-
   const transcriptionsRef = useRef(transcriptions);
   transcriptionsRef.current = transcriptions;
 
-  // Fix: Replaced non-exported type "LiveSession" with "any".
+  const { userPlan, authenticated, user } = useUser();
+  const { setView } = useContext(AppViewContext)!;
+  const canAccessCofounder = authenticated && (userPlan === 'pro' || userPlan === 'advanced');
+
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -161,7 +167,6 @@ const AIHub: React.FC = () => {
       setTranscriptToSave(transcript);
       setIsSaveModalOpen(true);
     } else if (isError) {
-      // Clear transcript on error to avoid confusion
       setTranscriptions([]);
     }
 
@@ -171,34 +176,74 @@ const AIHub: React.FC = () => {
   }, [cleanupAudio]);
 
   const handleSaveSession = async (sessionName: string) => {
-    if (!transcriptToSave || !supabase) return;
+    if (!user?.id) {
+      alert("You must be logged in to save conversations.");
+      setView(View.Auth);
+      return;
+    }
+    if (!transcriptToSave || transcriptToSave.length === 0) {
+      alert("No transcript to save.");
+      return;
+    }
     try {
-      await saveSession(supabase, sessionName, transcriptToSave);
-      handleNewSession(); // Clear transcript after saving
-    } catch (e) {
-      console.error("Failed to save session:", e);
-      setError("Could not save session to the database.");
-    } finally {
+      await saveSession(user.id, sessionName, transcriptToSave);
+      alert("Conversation saved successfully!");
       setIsSaveModalOpen(false);
       setTranscriptToSave(null);
+      handleNewSession();
+    } catch (error) {
+      console.error("Failed to save session:", error);
+      alert("Failed to save conversation. Please try again.");
     }
   };
   
   const handleCloseSaveModal = () => {
     setIsSaveModalOpen(false);
     setTranscriptToSave(null);
+    handleNewSession(); // Clear for next session regardless
   };
 
   const handleNewSession = () => {
     setTranscriptions([]);
-    setCallStatus(CallStatus.Idle);
     setError(null);
+    if (!authenticated) {
+      setCallStatus(CallStatus.LoginRequired);
+    } else if (!canAccessCofounder) {
+      setCallStatus(CallStatus.UpgradeRequired);
+    } else if (userPlan === 'pro') {
+      setCallStatus(CallStatus.ProRateLimited);
+    } else {
+      setCallStatus(CallStatus.Idle);
+    }
   };
+
+  useEffect(() => {
+    // Set initial status based on user plan and authentication when component mounts or plan changes
+    if (!authenticated) {
+      setCallStatus(CallStatus.LoginRequired);
+    } else if (!canAccessCofounder) {
+      setCallStatus(CallStatus.UpgradeRequired);
+    } else if (userPlan === 'pro') {
+      setCallStatus(CallStatus.ProRateLimited);
+    } else {
+      setCallStatus(CallStatus.Idle);
+    }
+  }, [userPlan, canAccessCofounder, authenticated]);
 
   const startConversation = async () => {
     if (isConversing) return;
+    if (!authenticated) {
+      setError(CallStatus.LoginRequired);
+      setView(View.Auth);
+      return;
+    }
+    if (!canAccessCofounder) {
+      setError(CallStatus.UpgradeRequired);
+      setView(View.Pricing);
+      return;
+    }
     
-    handleNewSession(); // Always start with a clean state
+    handleNewSession();
     setError(null);
     setCallStatus(CallStatus.Initializing);
     setIsConversing(true);
@@ -214,13 +259,13 @@ const AIHub: React.FC = () => {
 
       setCallStatus(CallStatus.Connecting);
       
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY }); 
       
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
           systemInstruction: `You are 'Strat,' an expert AI business strategist and startup cofounder. Your core purpose is to be a proactive, insightful partner who challenges the user to think critically about their business.
 
 Your first action in every call is to speak first. Introduce yourself as 'Strat' and ask if there's a specific business idea or challenge the user wants to focus on today. For example: "It's Strat. Good to connect. Do you have a specific business challenge on your mind, or should we jump into some strategic brainstorming?"
@@ -254,8 +299,6 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
             scriptProcessorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
             
             sessionPromise.then(session => {
-                session?.sendRealtimeInput({ text: "Initiate the strategy session." });
-
                 if(scriptProcessorRef.current) {
                   scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
                     const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
@@ -360,6 +403,9 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
               case 'NotReadableError':
                   specificError = 'There was a hardware error with your microphone. Please check your device connection.';
                   break;
+              case 'SecurityError':
+                  specificError = 'Microphone access requires a secure context (HTTPS). Please ensure you are accessing the app over HTTPS or on localhost.';
+                  break;
               default:
                   specificError = `Could not start the call due to an initialization error: ${err.message}`;
           }
@@ -378,7 +424,19 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
     };
   }, [stopConversationStable]);
   
-  const statusMessage = error || callStatus;
+  let statusMessage = error;
+  if (!statusMessage) {
+    if (!authenticated) {
+      statusMessage = CallStatus.LoginRequired;
+    } else if (!canAccessCofounder) {
+      statusMessage = CallStatus.UpgradeRequired;
+    } else if (userPlan === 'pro') {
+      statusMessage = CallStatus.ProRateLimited;
+    } else {
+      statusMessage = callStatus;
+    }
+  }
+
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-24 flex flex-col items-center">
@@ -406,19 +464,41 @@ Your tone is direct, sharp, but always constructive. You are focused on actionab
           </div>
           <div className="flex flex-col items-center border-t border-border pt-6">
             <div className="relative flex justify-center items-center w-full h-5 mb-4">
-               <p className={`text-sm text-center ${error ? 'text-red-500' : 'text-secondary-foreground/70'}`}>{statusMessage}</p>
-                {!isConversing && transcriptions.length > 0 && (
-                  <button 
-                    onClick={handleNewSession}
-                    className="absolute right-0 text-sm font-semibold text-primary hover:underline"
-                  >
-                    New Session
-                  </button>
-                )}
+               <p className={`text-sm text-center ${error ? 'text-red-500' : (statusMessage === CallStatus.UpgradeRequired || statusMessage === CallStatus.LoginRequired ? 'text-yellow-400' : 'text-secondary-foreground/70')}`}>{statusMessage}</p>
             </div>
+             <div className="mb-6 w-full max-w-sm grid grid-cols-2 gap-4 items-end">
+                <div>
+                  <label htmlFor="voice-select" className="block text-xs font-medium text-secondary-foreground/80 mb-1 text-left">
+                    AI Voice
+                  </label>
+                  <select
+                    id="voice-select"
+                    value={voice}
+                    onChange={(e) => setVoice(e.target.value)}
+                    disabled={isConversing || !canAccessCofounder || !authenticated}
+                    className="w-full p-2 bg-secondary border border-border rounded-md text-sm focus:ring-2 focus:ring-primary focus:outline-none transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {AI_VOICES.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <button
+                    onClick={handleNewSession}
+                    disabled={isConversing || transcriptions.length === 0}
+                    className="w-full p-2 flex items-center justify-center gap-2 bg-secondary text-secondary-foreground rounded-md font-semibold hover:bg-accent disabled:bg-secondary/50 disabled:text-secondary-foreground/50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                    <span>Clear</span>
+                  </button>
+                </div>
+              </div>
             <button
               onClick={isConversing ? () => stopConversation() : startConversation}
-              disabled={isConversing && callStatus !== CallStatus.Live && callStatus !== CallStatus.Connected}
+              disabled={isConversing || !canAccessCofounder || !authenticated}
               className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${isConversing ? 'bg-red-600 hover:bg-red-700 animate-pulse-glow' : 'bg-green-500 hover:bg-green-600'} disabled:bg-secondary disabled:cursor-not-allowed`}
               aria-label={isConversing ? 'End call' : 'Start call'}
             >

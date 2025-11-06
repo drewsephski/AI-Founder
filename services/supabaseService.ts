@@ -1,128 +1,179 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-// FIX: The `Session` type is not exported from '@clerk/clerk-react'. Using `any` as a fallback since the exact type is not available for import.
-import { ToolType, SavedSession, TranscriptionEntry } from '../types';
+import { GoogleGenAI, GenerateContentResponse, Modality } from "@google/genai";
+import { createClient, SupabaseClient, User, Session } from '@supabase/supabase-js';
+import { ToolType, SavedSession, TranscriptionEntry, UserPlan } from '../types';
 
-// FIX: Use process.env and the VITE_ prefix to access environment variables correctly.
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
+let supabase: SupabaseClient | null = null;
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+} else {
+  console.error("Supabase URL or Anon Key is missing. Supabase functionality will be disabled.");
+}
 
-// This function creates a Supabase client that is authenticated with Clerk.
-export const createClerkSupabaseClient = (session: any | null): SupabaseClient | null => {
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !session) {
-        return null;
-    }
+// Ensure Supabase client is initialized before use
+function getSupabase() {
+  if (!supabase) {
+    throw new Error("Supabase client not initialized. Check environment variables.");
+  }
+  return supabase;
+}
 
-    return createClient(
-        SUPABASE_URL,
-        SUPABASE_ANON_KEY,
-        {
-            global: {
-                // The `accessToken` function is called by the Supabase client to get a fresh token.
-                // This ensures that all requests to Supabase are authenticated with the current user's session.
-                // FIX: Removed default `{}` for options and used optional chaining to prevent type error.
-                fetch: async (url, options) => {
-                    const clerkToken = await session.getToken({ template: 'supabase' });
-
-                    const headers = new Headers(options?.headers);
-                    headers.set('Authorization', `Bearer ${clerkToken}`);
-                    
-                    return fetch(url, { ...options, headers });
-                },
-            },
-        }
-    );
+// --- Authentication ---
+export const signIn = async (email: string, password: string) => {
+  const { data, error } = await getSupabase().auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
 };
 
-// --- User Roles ---
-export const getUserRole = async (client: SupabaseClient): Promise<string | null> => {
-    // This assumes a 'user_roles' table with RLS enabled.
-    // The table should have 'user_id' (matching Clerk's user ID) and 'role' columns.
-    const { data, error } = await client.from('user_roles').select('role').single();
-    if (error) {
-        // It's common for a user to not have a role initially, so don't log every error.
-        if (error.code !== 'PGRST116') { // PGRST116 = 'JWSError JWSInvalidSignature'
-             console.error('Error fetching user role:', error);
-        }
-        return null;
-    }
-    return data?.role || 'user'; // Default to 'user' if role is null
+export const signUp = async (email: string, password: string) => {
+  const { data, error } = await getSupabase().auth.signUp({ email, password });
+  if (error) throw error;
+  return data;
 };
 
-
-// --- Favorites ---
-export const getFavorites = async (client: SupabaseClient): Promise<ToolType[]> => {
-    const { data, error } = await client.from('favorites').select('tool_type');
-    if (error) {
-        console.error('Error fetching favorites:', error);
-        return [];
-    }
-    return data.map((item: { tool_type: ToolType }) => item.tool_type);
+export const signOut = async () => {
+  const { error } = await getSupabase().auth.signOut();
+  if (error) throw error;
 };
 
-export const toggleFavorite = async (client: SupabaseClient, toolType: ToolType, isFavorite: boolean): Promise<void> => {
-    if (isFavorite) {
-        const { error } = await client.from('favorites').delete().match({ tool_type: toolType });
-        if (error) console.error('Error removing favorite:', error);
-    } else {
-        const { error } = await client.from('favorites').insert({ tool_type: toolType });
-         if (error) console.error('Error adding favorite:', error);
-    }
+export const getSession = async (): Promise<{ session: Session | null; user: User | null }> => {
+  // Fix: Explicitly destructure data from the response to help TypeScript infer types correctly.
+  const response = await getSupabase().auth.getSession();
+  const { data, error } = response;
+  if (error) throw error;
+  return { session: data.session, user: data.user };
 };
 
-// --- Tool Usage ---
-export const getUsageData = async (client: SupabaseClient): Promise<Record<ToolType, number>> => {
-    // This function now fetches daily usage data.
-    // It assumes a 'daily_tool_usage' table with RLS enabled and columns:
-    // tool_type, launch_count, usage_date.
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD format
-    const { data, error } = await client
-        .from('daily_tool_usage')
-        .select('tool_type, launch_count')
-        .eq('usage_date', today);
-
-    if (error) {
-        console.error('Error fetching daily usage data:', error);
-        return {} as Record<ToolType, number>;
-    }
-
-    return data.reduce((acc: Record<ToolType, number>, item: { tool_type: ToolType, launch_count: number }) => {
-        acc[item.tool_type] = item.launch_count;
-        return acc;
-    }, {} as Record<ToolType, number>);
+export const onAuthStateChange = (callback: (event: string, session: Session | null) => void) => {
+  return getSupabase().auth.onAuthStateChange(callback);
 };
 
-export const incrementToolUsage = async (client: SupabaseClient, toolType: ToolType): Promise<{error?: any}> => {
-    // This now calls an RPC function that handles the logic of incrementing
-    // the daily usage count for a tool, creating a new row if one doesn't exist for the day.
-    const { error } = await client.rpc('increment_daily_tool_usage', { tool_type_arg: toolType });
-    if (error) {
-        console.error('Error incrementing daily tool usage:', error);
-    }
-    return { error };
+// --- User Profiles ---
+export interface UserProfile {
+  id: string;
+  email: string;
+  user_plan: UserPlan;
+  paddle_customer_id: string | null;
+  paddle_subscription_id: string | null;
+  ai_chat_generations_daily_limit: number;
+  image_generations_daily_limit: number;
+  last_usage_reset_date: string;
+}
+
+export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {
+  const { data, error } = await getSupabase()
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
+  
+  if (error && error.code !== 'PGRST116') { // PGRST116 means 'no rows found'
+    console.error("Error fetching user profile:", error);
+    throw error;
+  }
+  return data;
 };
 
+export const upsertUserProfile = async (profile: Partial<UserProfile>): Promise<UserProfile> => {
+  const { data, error } = await getSupabase()
+    .from('profiles')
+    .upsert(profile)
+    .select()
+    .single();
 
-// --- AI Hub Sessions ---
-export const getSavedSessions = async (client: SupabaseClient): Promise<SavedSession[]> => {
-    const { data, error } = await client.from('sessions').select('*').order('timestamp', { ascending: false });
-    if (error) {
-        console.error('Error fetching sessions:', error);
-        return [];
-    }
-    return data;
+  if (error) {
+    console.error("Error upserting user profile:", error);
+    throw error;
+  }
+  return data;
 };
 
-export const saveSession = async (client: SupabaseClient, name: string, transcript: TranscriptionEntry[]): Promise<void> => {
-    const { error } = await client.from('sessions').insert({
-        name,
-        transcript,
-        timestamp: new Date().toISOString()
-    });
+// --- Favorites (now uses Supabase) ---
+export const getFavorites = async (userId: string): Promise<ToolType[]> => {
+  const { data, error } = await getSupabase()
+    .from('favorites')
+    .select('tool_type')
+    .eq('user_id', userId);
+
+  if (error) {
+    console.error("Error fetching favorites:", error);
+    throw error;
+  }
+  return data.map(fav => fav.tool_type as ToolType);
+};
+
+export const toggleFavorite = async (userId: string, toolType: ToolType, isFavorite: boolean): Promise<void> => {
+  if (isFavorite) {
+    const { error } = await getSupabase()
+      .from('favorites')
+      .insert({ user_id: userId, tool_type: toolType });
     if (error) throw error;
+  } else {
+    const { error } = await getSupabase()
+      .from('favorites')
+      .delete()
+      .eq('user_id', userId)
+      .eq('tool_type', toolType);
+    if (error) throw error;
+  }
 };
 
-export const deleteSession = async (client: SupabaseClient, sessionId: string): Promise<void> => {
-    const { error } = await client.from('sessions').delete().match({ id: sessionId });
-    if (error) throw error;
+// --- Tool Usage (now uses Supabase) ---
+export const decrementUserUsage = async (
+  userId: string,
+  usageType: 'ai_chat_generations_daily_limit' | 'image_generations_daily_limit'
+): Promise<void> => {
+  const { data, error } = await getSupabase()
+    .rpc('decrement_usage', { user_id_param: userId, usage_type_param: usageType }); // Using an RPC for atomic decrement
+
+  if (error) {
+    console.error(`Error decrementing ${usageType} for user ${userId}:`, error);
+    throw error;
+  }
+};
+
+
+// --- AI Hub Sessions (now uses Supabase) ---
+export const getSavedSessions = async (userId: string): Promise<SavedSession[]> => {
+  const { data, error } = await getSupabase()
+    .from('ai_sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .order('timestamp', { ascending: false });
+
+  if (error) {
+    console.error("Error fetching saved sessions:", error);
+    throw error;
+  }
+  return data.map(session => ({
+    id: session.id,
+    name: session.name,
+    timestamp: session.timestamp,
+    transcript: session.transcript,
+  }));
+};
+
+export const saveSession = async (userId: string, name: string, transcript: TranscriptionEntry[]): Promise<void> => {
+  const { error } = await getSupabase()
+    .from('ai_sessions')
+    .insert({ user_id: userId, name, transcript });
+
+  if (error) {
+    console.error("Error saving session:", error);
+    throw error;
+  }
+};
+
+export const deleteSession = async (sessionId: string): Promise<void> => {
+  const { error } = await getSupabase()
+    .from('ai_sessions')
+    .delete()
+    .eq('id', sessionId);
+
+  if (error) {
+    console.error("Error deleting session:", error);
+    throw error;
+  }
 };

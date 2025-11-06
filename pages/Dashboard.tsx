@@ -1,29 +1,33 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { useSession } from '@clerk/clerk-react';
-import { createClerkSupabaseClient, getSavedSessions, deleteSession as deleteSessionFromDb } from '../services/supabaseService';
-import { SavedSession } from '../types';
+import React, { useState, useEffect, useContext } from 'react';
+import { getSavedSessions, deleteSession as deleteSessionFromDb } from '../services/supabaseService';
+import { SavedSession, View } from '../types';
 import { BotIcon, UserIcon } from '../components/icons/Icons';
+import { useUser } from '../UserContext';
+import { AppViewContext } from '../App';
+
 
 const Dashboard: React.FC = () => {
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<SavedSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-
-  const { session } = useSession();
-  const supabase = useMemo(() => createClerkSupabaseClient(session), [session]);
+  const { authenticated, user } = useUser();
+  const { setView } = useContext(AppViewContext)!;
 
   useEffect(() => {
     const loadSessions = async () => {
-      if (!supabase) {
+      if (!authenticated || !user?.id) {
         setIsLoading(false);
+        setSessions([]);
         return;
-      };
+      }
       setIsLoading(true);
       try {
-        const storedSessions = await getSavedSessions(supabase);
+        const storedSessions = await getSavedSessions(user.id);
         setSessions(storedSessions);
         if (storedSessions.length > 0) {
           setSelectedSession(storedSessions[0]);
+        } else {
+          setSelectedSession(null);
         }
       } catch (error) {
         console.error("Failed to load sessions from Supabase:", error);
@@ -32,23 +36,38 @@ const Dashboard: React.FC = () => {
       }
     };
     loadSessions();
-  }, [supabase]);
+  }, [authenticated, user]);
 
   const handleDeleteSession = async (sessionId: string) => {
-    if (!supabase) return;
-    if (window.confirm("Are you sure you want to delete this session?")) {
-        try {
-            await deleteSessionFromDb(supabase, sessionId);
-            const updatedSessions = sessions.filter(s => s.id !== sessionId);
-            setSessions(updatedSessions);
-            if (selectedSession?.id === sessionId) {
-                setSelectedSession(updatedSessions.length > 0 ? updatedSessions[0] : null);
-            }
-        } catch(error) {
-            console.error("Failed to delete session:", error);
-            // You might want to show an error message to the user here.
-        }
+    if (!authenticated || !user?.id) {
+      alert("Please sign in to manage your saved sessions.");
+      setView(View.Auth);
+      return;
     }
+    if (window.confirm("Are you sure you want to delete this session?")) {
+      try {
+        await deleteSessionFromDb(sessionId);
+        setSessions(prev => prev.filter(session => session.id !== sessionId));
+        if (selectedSession?.id === sessionId) {
+          setSelectedSession(null);
+        }
+        alert("Session deleted successfully!");
+      } catch (error) {
+        console.error("Failed to delete session:", error);
+        alert("Failed to delete session. Please try again.");
+      }
+    }
+  }
+
+  if (!authenticated) {
+    return (
+      <div className="container mx-auto px-4 py-24 flex flex-col items-center justify-center min-h-[50vh] text-center">
+        <h1 className="text-3xl font-bold text-red-400 mb-4">Access Denied</h1>
+        <p className="text-lg text-secondary-foreground/80">
+          Please <button onClick={() => setView(View.Auth)} className="text-primary hover:underline">log in</button> to view your conversation history.
+        </p>
+      </div>
+    );
   }
 
   return (

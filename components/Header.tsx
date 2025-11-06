@@ -1,30 +1,43 @@
 import React, { useState } from 'react';
 import { View } from '../types';
-import { LogoIcon, MenuIcon, CloseIcon } from './icons/Icons';
-import { SignedIn, SignedOut, UserButton, SignInButton } from '@clerk/clerk-react';
+import { LogoIcon, MenuIcon, CloseIcon, UserIcon } from './icons/Icons';
+import { useUser } from '../UserContext';
 
 interface HeaderProps {
   currentView: View;
   setView: (view: View) => void;
-  userRole: string | null;
 }
 
-const Header: React.FC<HeaderProps> = ({ currentView, setView, userRole }) => {
+const Header: React.FC<HeaderProps> = ({ currentView, setView }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const { authenticated, logout, user, loadingAuth } = useUser();
 
   const navItems = [
     { view: View.Marketplace, label: 'Marketplace' },
     { view: View.AIHub, label: 'AI Hub' },
     { view: View.Dashboard, label: 'Dashboard' },
+    { view: View.Pricing, label: 'Pricing' },
   ];
-  
-  if (userRole === 'admin') {
-      navItems.push({ view: View.Admin, label: 'Admin' });
-  }
 
   const handleNavClick = (view: View) => {
     setView(view);
-    setIsMenuOpen(false); // Close menu on navigation
+    setIsMenuOpen(false);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      setView(View.Auth); // Redirect to auth page after logout
+    } catch (error) {
+      console.error("Logout failed:", error);
+      alert("Logout failed. Please try again.");
+    }
+    setIsMenuOpen(false);
+  };
+
+  const handleLoginRegister = () => {
+    setView(View.Auth);
+    setIsMenuOpen(false);
   };
 
   return (
@@ -54,16 +67,28 @@ const Header: React.FC<HeaderProps> = ({ currentView, setView, userRole }) => {
               </nav>
             </div>
             <div className="flex items-center space-x-4">
-               <SignedIn>
-                 <UserButton afterSignOutUrl="/" />
-               </SignedIn>
-               <SignedOut>
-                 <SignInButton mode="modal">
-                   <button className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md font-semibold hover:bg-primary/90 transition-colors">
-                      Sign In
-                   </button>
-                 </SignInButton>
-               </SignedOut>
+              {!loadingAuth && (
+                authenticated ? (
+                  <div className="relative group">
+                    <button className="flex items-center gap-2 p-2 text-foreground rounded-md hover:bg-secondary transition-colors">
+                      <UserIcon className="h-5 w-5" />
+                      <span className="hidden lg:inline text-sm font-medium">{user?.email || 'Profile'}</span>
+                    </button>
+                    <div className="absolute right-0 mt-2 w-48 bg-card border border-border rounded-md shadow-lg py-1 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 ease-out z-50">
+                      <button onClick={handleLogout} className="block w-full text-left px-4 py-2 text-sm text-secondary-foreground hover:bg-secondary">
+                        Logout
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={handleLoginRegister}
+                    className="px-4 py-2 bg-primary text-primary-foreground rounded-md font-semibold hover:bg-primary/90 transition-colors text-sm"
+                  >
+                    Login / Register
+                  </button>
+                )
+              )}
               {/* Mobile Menu Button */}
               <div className="md:hidden">
                 <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 text-foreground">
@@ -92,6 +117,23 @@ const Header: React.FC<HeaderProps> = ({ currentView, setView, userRole }) => {
                   {item.label}
                 </button>
               ))}
+              {!loadingAuth && (
+                authenticated ? (
+                  <button 
+                    onClick={handleLogout}
+                    className="w-full text-left px-4 py-3 rounded-md text-lg font-medium transition-colors text-secondary-foreground/80 hover:bg-secondary"
+                  >
+                    Logout
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleLoginRegister}
+                    className="w-full text-left px-4 py-3 rounded-md text-lg font-medium transition-colors text-secondary-foreground/80 hover:bg-secondary"
+                  >
+                    Login / Register
+                  </button>
+                )
+              )}
             </nav>
         </div>
       )}

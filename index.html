@@ -42,6 +42,141 @@
         }
       }
     </script>
+    <!-- Paddle.js for payment integration (sandbox for testing) -->
+    <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+    <script>
+      // Mock Paddle for local development if not loaded or in an environment without the CDN
+      if (typeof Paddle === 'undefined') {
+        window.Paddle = {
+          Checkout: {
+            open: (options) => {
+              console.log('Mock Paddle Checkout opened:', options);
+              // Simulate success after a short delay
+              setTimeout(() => {
+                const mockSubscription = { 
+                  customer_id: 'cus_mock', 
+                  subscription_id: 'sub_mock', 
+                  status: 'active', 
+                  items: options.items,
+                  first_transaction: {
+                    id: 'txn_mock_initial',
+                    invoice_id: 'inv_mock_initial',
+                    amount: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, // Match pricing
+                    currency_code: 'USD',
+                  },
+                  next_transaction: {
+                    id: 'txn_mock_next',
+                    invoice_id: 'inv_mock_next',
+                    amount: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, // Match pricing
+                    currency_code: 'USD',
+                  },
+                  collection_mode: 'automatic',
+                  billing_cycle: { interval: 'month', frequency: 1 },
+                };
+                const mockCheckoutData = {
+                    currency_code: 'USD',
+                    items: options.items.map(item => ({
+                      price_id: item.priceId,
+                      quantity: item.quantity,
+                      product: {
+                        image_url: null, // No image in mock
+                        name: item.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 'Pro Plan' : 'Advanced Plan',
+                      },
+                      totals: { total: item.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, subtotal: item.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, discount: 0, tax: 0 },
+                      billing_cycle: { interval: 'month', frequency: 1 },
+                    })),
+                    totals: { total: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, subtotal: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, discount: 0, tax: 0 },
+                    recurring_totals: { total: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, subtotal: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, discount: 0, tax: 0 },
+                    customer_id: 'cus_mock',
+                    status: 'active',
+                    transaction_id: 'txn_mock',
+                    payments: [],
+                    subscription: mockSubscription // Add subscription details
+                };
+
+                // Simulate checkout.completed event for embedded checkout
+                window.dispatchEvent(new CustomEvent('paddle_checkout.completed', {
+                  detail: { data: mockCheckoutData }
+                }));
+              }, 1500);
+            },
+            updateItems: (options) => {
+              console.log('Mock Paddle Checkout updateItems:', options);
+              setTimeout(() => {
+                const mockCheckoutData = { /* minimal data structure matching CheckoutEventsData */
+                    currency_code: 'USD',
+                    items: options.items.map(item => ({
+                      price_id: item.priceId,
+                      quantity: item.quantity,
+                      product: {
+                        image_url: null, // No image in mock
+                        name: item.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 'Pro Plan' : 'Advanced Plan',
+                      },
+                      totals: { total: item.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, subtotal: item.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, discount: 0, tax: 0 },
+                      billing_cycle: { interval: 'month', frequency: 1 },
+                    })),
+                    totals: { total: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, subtotal: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, discount: 0, tax: 0 },
+                    recurring_totals: { total: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, subtotal: options.items?.[0]?.priceId === 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d' ? 1290 : 3990, discount: 0, tax: 0 },
+                    customer_id: 'cus_mock',
+                    status: 'active',
+                    transaction_id: 'txn_mock',
+                    payments: []
+                };
+                window.dispatchEvent(new CustomEvent('paddle_checkout.updated', {
+                  detail: { data: mockCheckoutData }
+                }));
+              }, 100);
+            },
+          },
+          Setup: (config) => {
+            console.log('Mock Paddle Setup:', config);
+            window.Paddle.Initialized = true; // Mark as initialized
+            if (config.eventCallback) {
+                // Simulate initial loaded event for embedded checkout
+                setTimeout(() => {
+                    const defaultPriceId = 'pri_01hsmv8f6f9h4f7e2s1a7g6f5d'; // Default price for mock
+                    const mockCheckoutData = { 
+                        currency_code: 'USD',
+                        items: config.checkout?.items || [{
+                          price_id: defaultPriceId,
+                          quantity: 1,
+                          product: {
+                            image_url: null,
+                            name: 'Pro Plan',
+                          },
+                          totals: { total: 1290, subtotal: 1290, discount: 0, tax: 0 },
+                          billing_cycle: { interval: 'month', frequency: 1 },
+                        }],
+                        totals: { total: 1290, subtotal: 1290, discount: 0, tax: 0 },
+                        recurring_totals: { total: 1290, subtotal: 1290, discount: 0, tax: 0 },
+                        customer_id: 'cus_mock_loaded',
+                        status: 'active',
+                        transaction_id: 'txn_mock_loaded',
+                        payments: []
+                    };
+                    config.eventCallback({ name: 'checkout.loaded', data: mockCheckoutData });
+                }, 100);
+            }
+          },
+          Initialized: false // Initial state
+        };
+      }
+      Paddle.Environment.set('sandbox');
+
+      // Expose environment variables for React components (Vite style)
+      window.process = window.process || {};
+      window.process.env = window.process.env || {};
+      // Paddle V2 Client Token
+      window.process.env.PADDLE_CLIENT_TOKEN = 'test_4j75z9940x269l3d65b7i5j21h8'; // Replace with your actual Client Token from Paddle
+      window.process.env.PADDLE_ENV = 'sandbox'; // 'sandbox' or 'production'
+
+      // Supabase
+      window.process.env.SUPABASE_URL = 'https://abc.supabase.co'; // Replace with your actual Supabase URL
+      window.process.env.SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY'; // Replace with your actual Supabase Anon Key
+
+      // Google GenAI API Key
+      window.process.env.API_KEY = 'YOUR_GENAI_API_KEY'; // Replace with your actual GenAI API Key
+    </script>
   <script type="importmap">
 {
   "imports": {
@@ -49,8 +184,9 @@
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "@clerk/clerk-react": "https://aistudiocdn.com/@clerk/clerk-react@^5.2.1",
-    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.44.4"
+    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.44.4",
+    "@paddle/paddle-js": "https://aistudiocdn.com/@paddle/paddle-js@^1.4.2",
+    "@paddle/paddle-js/": "https://aistudiocdn.com/@paddle/paddle-js@^1.4.2/"
   }
 }
 </script>
